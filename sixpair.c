@@ -42,32 +42,51 @@
 
 void fatal(char *msg) { perror(msg); exit(1); }
 
-void show_master(usb_dev_handle *devh, int itfnum) {
-  printf("Current Bluetooth master: ");
-  unsigned char msg[8];
+void show_master(usb_dev_handle *devh, int itfnum, int product) {
+  int type = 0x03f5;
+  if (product == PRODUCT_DS4) type = 0x0312;
+
+  unsigned char msg[16];
   int res = usb_control_msg
     (devh, USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
-     0x01, 0x03f5, itfnum, (void*)msg, sizeof(msg), 5000);
+     0x01, type, itfnum, (void*)msg, sizeof(msg), 5000);
   if ( res < 0 ) { perror("USB_REQ_GET_CONFIGURATION"); return; }
-  printf("%02x:%02x:%02x:%02x:%02x:%02x\n",
-	 msg[2], msg[3], msg[4], msg[5], msg[6], msg[7]);
+
+
+  if (product == PRODUCT_DS4) {
+        printf("Current Bluetooth master for DS4: ");
+    printf("%02x:%02x:%02x:%02x:%02x:%02x\n",
+        msg[15], msg[14], msg[13], msg[12], msg[11], msg[10]);
+  }
+  else {
+        printf("Current Bluetooth master for DS3: ");
+    printf("%02x:%02x:%02x:%02x:%02x:%02x\n",
+        msg[2],msg[3],msg[4],msg[5],msg[6], msg[7]);
+  }
 }
 
-void set_master(usb_dev_handle *devh, int itfnum, int mac[6]) {
+void set_master(usb_dev_handle *devh, int itfnum, int mac[6], int product) {
   printf("Setting master bd_addr to %02x:%02x:%02x:%02x:%02x:%02x\n",
-	 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-  char msg[8]= { 0x01, 0x00, mac[0],mac[1],mac[2],mac[3],mac[4],mac[5] };
-  int res = usb_control_msg
-    (devh,
-     USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
-     0x09,
-     0x03f5, itfnum, msg, sizeof(msg),
-     5000);
+   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+  int res = -1;
+
+  if (product == PRODUCT_DS4) {
+    char msg[23] = { 0x13, mac[5], mac[4], mac[3], mac[2], mac[1], mac[0],
+        0x56, 0xE8, 0x81, 0x38, 0x08, 0x06, 0x51, 0x41, 0xC0, 0x7F, 0x12, 0xAA, 0xD9, 0x66, 0x3C, 0xCE };
+    res = usb_control_msg
+      (devh, USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE, 0x09, 0x0313, itfnum, (char*)msg, sizeof(msg), 5000);
+  }
+  else {
+    char msg[8]= { 0x01, 0x00, mac[0],mac[1],mac[2],mac[3],mac[4],mac[5] };
+    res = usb_control_msg
+      (devh, USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE, 0x09, 0x03f5, itfnum, (char*)msg, sizeof(msg), 5000);
+  }
   if ( res < 0 ) fatal("USB_REQ_SET_CONFIGURATION");
 }
 
 void process_device(int argc, char **argv, struct usb_device *dev,
-		    struct usb_config_descriptor *cfg, int itfnum) {
+        struct usb_config_descriptor *cfg, int itfnum) {
   int mac[6];
 
   usb_dev_handle *devh = usb_open(dev);
@@ -82,7 +101,7 @@ void process_device(int argc, char **argv, struct usb_device *dev,
 
   if ( argc >= 2 ) {
     if ( sscanf(argv[1], "%x:%x:%x:%x:%x:%x",
-		&mac[0],&mac[1],&mac[2],&mac[3],&mac[4],&mac[5]) != 6 ) {
+    &mac[0],&mac[1],&mac[2],&mac[3],&mac[4],&mac[5]) != 6 ) {
 
       printf("usage: %s [<bd_addr of master>]\n", argv[0]);
       exit(1);
@@ -90,21 +109,21 @@ void process_device(int argc, char **argv, struct usb_device *dev,
   } else {
     FILE *f = popen("hcitool dev", "r");
     if ( !f ||
-	 fscanf(f, "%*s\n%*s %x:%x:%x:%x:%x:%x",
-		&mac[0],&mac[1],&mac[2],&mac[3],&mac[4],&mac[5]) != 6 ) {
+   fscanf(f, "%*s\n%*s %x:%x:%x:%x:%x:%x",
+    &mac[0],&mac[1],&mac[2],&mac[3],&mac[4],&mac[5]) != 6 ) {
       printf("Unable to retrieve local bd_addr from `hcitool dev`.\n");
       printf("Please enable Bluetooth or specify an address manually.\n");
       exit(1);
     }
     pclose(f);
   }
-    
-  set_master(devh, itfnum, mac);
+
+  set_master(devh, itfnum, mac, dev->descriptor.idProduct);
 
   usb_close(devh);
 }
 
-int main(int argc, char *argv[]) {  
+int main(int argc, char *argv[]) {
 
   usb_init();
   if ( usb_find_busses() < 0 ) fatal("usb_find_busses");
@@ -120,25 +139,25 @@ int main(int argc, char *argv[]) {
     for ( dev=bus->devices; dev; dev=dev->next) {
       struct usb_config_descriptor *cfg;
       for ( cfg = dev->config;
-	    cfg < dev->config + dev->descriptor.bNumConfigurations;
-	    ++cfg ) {
-	int itfnum;
-	for ( itfnum=0; itfnum<cfg->bNumInterfaces; ++itfnum ) {
-	  struct usb_interface *itf = &cfg->interface[itfnum];
-	  struct usb_interface_descriptor *alt;
-	  for ( alt = itf->altsetting;
-		alt < itf->altsetting + itf->num_altsetting;
-		++alt ) {
-	    if ( dev->descriptor.idVendor == VENDOR &&
-		 (dev->descriptor.idProduct == PRODUCT_SIXAXIS ||
-		  dev->descriptor.idProduct == PRODUCT_NAVIGATION ||
-		  dev->descriptor.idProduct == PRODUCT_DS4) &&
-		 alt->bInterfaceClass == 3 ) {
-	      process_device(argc, argv, dev, cfg, itfnum);
-	      ++found;
-	    }
-	  }
-	}
+      cfg < dev->config + dev->descriptor.bNumConfigurations;
+      ++cfg ) {
+  int itfnum;
+  for ( itfnum=0; itfnum<cfg->bNumInterfaces; ++itfnum ) {
+    struct usb_interface *itf = &cfg->interface[itfnum];
+    struct usb_interface_descriptor *alt;
+    for ( alt = itf->altsetting;
+    alt < itf->altsetting + itf->num_altsetting;
+    ++alt ) {
+      if ( dev->descriptor.idVendor == VENDOR &&
+     (dev->descriptor.idProduct == PRODUCT_SIXAXIS ||
+      dev->descriptor.idProduct == PRODUCT_NAVIGATION ||
+      dev->descriptor.idProduct == PRODUCT_DS4)  &&
+      alt->bInterfaceClass == 3 ) {
+        process_device(argc, argv, dev, cfg, itfnum);
+        ++found;
+      }
+    }
+  }
       }
     }
   }
@@ -151,4 +170,3 @@ int main(int argc, char *argv[]) {
   return 0;
 
 }
-
