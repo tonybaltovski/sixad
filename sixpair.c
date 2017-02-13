@@ -97,7 +97,7 @@ void process_device(int argc, char **argv, struct usb_device *dev,
   int res = usb_claim_interface(devh, itfnum);
   if ( res < 0 ) fatal("usb_claim_interface");
 
-  show_master(devh, itfnum);
+  show_master(devh, itfnum, dev->descriptor.idProduct);
 
   if ( argc >= 2 ) {
     if ( sscanf(argv[1], "%x:%x:%x:%x:%x:%x",
